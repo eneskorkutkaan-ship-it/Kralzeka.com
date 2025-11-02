@@ -1,5 +1,4 @@
-Flask==2.2.5
-requests==2.31.0
-gunicorn==20.1.0
-Werkzeug==2.2.3
-Pillow==9.5.0
+Flask>=2.2.5
+requests>=2.31.0
+gunicorn>=20.1.0
+Werkzeug>=2.2.3
