@@ -1,7 +1,38 @@
-Flask>=2.2
-requests
-werkzeug
-python-dotenv
-beautifulsoup4
-lxml
-pillow
+# --- Web Framework ---
+Flask==3.0.3
+Flask-SocketIO==5.3.6
+Flask-Cors==4.0.1
+Flask-Login==0.6.3
+Flask-Session==0.5.0
+
+# --- Database ---
+SQLAlchemy==2.0.25
+
+# --- AI Models ---
+groq==0.9.0
+requests==2.31.0
+huggingface_hub==0.24.6
+
+# --- Image Processing ---
+Pillow==10.1.0
+opencv-python==4.10.0.84
+
+# --- File Handling ---
+Werkzeug==3.0.3
+
+# --- Data / JSON ---
+python-dotenv==1.0.1
+
+# --- Utils / Helpers ---
+uuid==1.30
+datetime==5.4
+tqdm==4.66.1
+
+# --- Security ---
+bcrypt==4.1.2
+
+# --- Deployment ---
+gunicorn==21.2.0
+
+# --- Optional (For Development) ---
+eventlet==0.35.1
