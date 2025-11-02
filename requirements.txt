@@ -1,8 +1,7 @@
-flask
-flask_sqlalchemy
+Flask>=2.2
 requests
+werkzeug
+python-dotenv
 beautifulsoup4
 lxml
 pillow
-groq
-python-dotenv
