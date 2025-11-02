@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Sunum Modu - KralZeka{% endblock %}
+{% block content %}
+<div class="container mt-4">
+  <div class="card shadow-sm p-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h4>🖼️ Sunum Modu</h4>
+      <form action="/logout" method="post">
+        <button class="btn btn-danger btn-sm">Çıkış Yap</button>
+      </form>
+    </div>
+
+    <p class="text-muted">
+      🎓 Bu modda KralZeka, senin için <strong>slayt, afiş veya sunum taslakları</strong> oluşturabilir.<br>
+      Konunu yaz, gerisini KralZeka halletsin!
+    </p>
+
+    <!-- Sunum Konusu Giriş Alanı -->
+    <form method="POST" action="/sunum_olustur" class="mb-3">
+      <div class="input-group">
+        <input type="text" name="konu" class="form-control" placeholder="Örn: Güneş Sistemi - 8. sınıf Fen Bilimleri" required>
+        <button type="submit" class="btn btn-primary">Sunum Oluştur</button>
+      </div>
+    </form>
+
+    {% if sunum %}
+    <hr>
+    <h5>📑 KralZeka Sunum Taslağı</h5>
+    <div class="p-3 border rounded bg-light" style="max-height: 400px; overflow-y: auto;">
+      {{ sunum|safe }}
+    </div>
+
+    <div class="mt-3">
+      <form method="POST" action="/sunum_indir">
+        <input type="hidden" name="icerik" value="{{ sunum }}">
+        <button type="submit" class="btn btn-success">⬇️ PDF Olarak İndir</button>
+      </form>
+    </div>
+    {% endif %}
+
+    {% if current_user.is_admin %}
+    <hr>
+    <h5>🧠 Gelişmiş Ayarlar (Yalnızca Admin)</h5>
+    <form method="POST" action="/sunum_admin">
+      <textarea name="ozel_icerik" class="form-control mb-2" rows="4" placeholder="Özel sunum yapısı ekleyin (Markdown / HTML desteği vardır)"></textarea>
+      <button type="submit" class="btn btn-warning">Uygula</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
