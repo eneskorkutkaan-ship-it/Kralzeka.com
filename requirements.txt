@@ -1,4 +1,8 @@
-Flask>=2.2.5
+flask
+flask_sqlalchemy
 requests
 beautifulsoup4
-Pillow
+lxml
+pillow
+groq
+python-dotenv
