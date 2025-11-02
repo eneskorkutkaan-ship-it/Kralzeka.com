@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Görsel Oluşturma - KralZeka{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+  <div class="card p-4 shadow-sm">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h4>🎨 Görsel Oluşturma & Kalite Yükseltme</h4>
+      <a href="{{ url_for('index') }}" class="btn btn-sm btn-secondary">Ana Sayfa</a>
+    </div>
+
+    <p class="text-muted">Yeni bir görsel oluşturmak için açıklama yazın. Mevcut görselin kalitesini yükseltmek için dosya yükleyin.</p>
+
+    <!-- Görsel Oluşturma -->
+    <div class="row g-3 mb-3">
+      <div class="col-md-8">
+        <label class="form-label">🖊️ Görsel Açıklaması (Prompt)</label>
+        <input type="text" id="gen-prompt" class="form-control" placeholder="Örnek: 'Gün batımında uçan şehir, sinematik, yüksek detay'">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Boyut</label>
+        <select id="gen-size" class="form-control">
+          <option value="512x512">512 x 512</option>
+          <option value="768x768">768 x 768</option>
+          <option value="1024x1024" selected>1024 x 1024</option>
+        </select>
+      </div>
+      <div class="col-12">
+        <button id="gen-btn" class="btn btn-primary">🪄 Görsel Oluştur</button>
+      </div>
+    </div>
+
+    <hr>
+
+    <!-- Kalite Yükseltme -->
+    <div class="row g-3 mb-3">
+      <div class="col-md-8">
+        <label class="form-label">📁 Varolan Görsel Seç (Kalite Yükseltme)</label>
+        <input type="file" id="up-image" class="form-control" accept="image/*">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Seviye</label>
+        <select id="up-level" class="form-control">
+          <option value="1">+1 (hafif)</option>
+          <option value="2" selected>+2 (orta)</option>
+          <option value="3">+3 (yüksek)</option>
+        </select>
+      </div>
+      <div class="col-12">
+        <button id="up-btn" class="btn btn-info">⬆️ Kaliteyi Yükselt</button>
+        <small class="d-block mt-2 text-muted">Not: Normal kullanıcılar günlük <strong>{{ image_limit }}</strong> hakkına sahiptir. Admin sınırsız.</small>
+      </div>
+    </div>
+
+    <hr>
+
+    <!-- Sonuç -->
+    <div class="mb-3">
+      <h5>🖼️ Sonuç</h5>
+      <div id="result-area" class="p-3 border" style="min-height:120px;">
+        {% if last_image %}
+          <div class="text-center">
+            <img src="data:image/png;base64,{{ last_image }}" alt="KralZeka Görsel" style="max-width:100%;height:auto;border-radius:8px">
+          </div>
+        {% else %}
+          <div class="muted">Henüz oluşturulmuş bir görsel yok.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Ek Ayarlar / Bilgiler -->
+    <div class="small text-muted">
+      <p><strong>İpucu:</strong> Prompt'ı kısa ve açıklayıcı tut. Stil (ör. "sinematik", "watercolor", "photorealistic") ve objeler arasına virgül koy.</p>
+      <p><strong>Gizlilik:</strong> Yalnızca yüklediğiniz görseller hafızaya alınır (isteğe bağlı / profil ayarından kontrol edilebilir).</p>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Basit frontend — backend endpoint'lerini projene göre bağla:
+  // Oluşturma: POST /api/generate_image  { prompt, size }
+  // Kalite yükseltme: POST /api/upgrade_image { image (file), level }
+  document.getElementById('gen-btn').addEventListener('click', async () => {
+    const prompt = document.getElementById('gen-prompt').value.trim();
+    const size = document.getElementById('gen-size').value;
+    if (!prompt) return alert('Lütfen bir açıklama gir.');
+    const btn = document.getElementById('gen-btn');
+    btn.disabled = true; btn.textContent = 'Oluşturuluyor...';
+    try {
+      const res = await fetch('/api/generate_image', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({prompt, size})
+      });
+      const data = await res.json();
+      if (res.ok && data.image_base64) {
+        document.getElementById('result-area').innerHTML = '<img src="data:image/png;base64,'+data.image_base64+'" style="max-width:100%;border-radius:8px">';
+      } else {
+        alert('Görsel üretilemedi: ' + (data.error || res.statusText));
+      }
+    } catch (e) {
+      alert('İstek sırasında hata: ' + e.message);
+    } finally {
+      btn.disabled = false; btn.textContent = '🪄 Görsel Oluştur';
+    }
+  });
+
+  document.getElementById('up-btn').addEventListener('click', async () => {
+    const fileInput = document.getElementById('up-image');
+    if (!fileInput.files || !fileInput.files[0]) return alert('Lütfen bir görsel seçin.');
+    const level = document.getElementById('up-level').value;
+    const btn = document.getElementById('up-btn');
+    btn.disabled = true; btn.textContent = 'Yükseltiliyor...';
+    try {
+      const form = new FormData();
+      form.append('image', fileInput.files[0]);
+      form.append('level', level);
+      const res = await fetch('/api/upgrade_image', { method: 'POST', body: form });
+      const data = await res.json();
+      if (res.ok && data.image_base64) {
+        document.getElementById('result-area').innerHTML = '<img src="data:image/png;base64,'+data.image_base64+'" style="max-width:100%;border-radius:8px">';
+      } else {
+        alert('Kalite yükseltilemedi: ' + (data.error || res.statusText));
+      }
+    } catch (e) {
+      alert('İstek sırasında hata: ' + e.message);
+    } finally {
+      btn.disabled = false; btn.textContent = '⬆️ Kaliteyi Yükselt';
+    }
+  });
+</script>
+{% endblock %}
