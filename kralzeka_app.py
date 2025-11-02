@@ -1,46 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-KralZeka — Single-file full app (kralzeka_full_app.py)
-
-Özellikler (hepsi tek dosyada):
-- Tek dosya: HTML, CSS gömülü; dışa statik dosya gerekmez (route ile sunulur)
-- SQLite DB (kendi içinde oluşturur)
-- Kayıt / Giriş (session ile)
-- Admin paneli (ilk admin: enes / şifre: enes1357924680) — bu admin korunur
-- Admin-only "kod yazma / öğretme" aracı (AI'ye prompt gönderir ve sonucu loglar)
-- Sohbet (AI) — Groq öncelikli, Hugging Face fallback (anahtar ENV'de)
-- Görsel üretme (HF) — admin sınırsız, normal kullanıcı günlük limit
-- Modlar / yan panel / mesajlar listesi
-- Hatalar loglanır; 500 sayfası gömülü
-- CSS gömülü (route /static/style.css ile sunulur)
-- Procfile içeriği gömülü (route /procfile)
-- Tüm arayüz Türkçe
+KralZeka v1 - Tek dosya tam sürüm (SQLite, inline templates & static)
+- Put SECRET_KEY, GROQ_API_KEY, HF_API_KEY into environment if you want AI features.
+- First admin: username=enes password=enes1357924680 (protected)
 """
-
 import os
 import sqlite3
 import json
 import uuid
 import functools
-import traceback
+import base64
+import logging
 from datetime import datetime
 from typing import Optional
 from flask import (
     Flask, request, redirect, url_for, session, g,
-    render_template_string, jsonify, send_file, Response
+    render_template, render_template_string, jsonify, abort, send_file, Response
 )
 from werkzeug.security import generate_password_hash, check_password_hash
-import base64
-import logging
+import requests
+from jinja2 import DictLoader
 
-# Optional imports used only if available (requests)
-try:
-    import requests
-except Exception:
-    requests = None
-
-# ========== AYARLAR ==========
+# ========== Konfig ==========
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DB_PATH = os.environ.get("KRALZEKA_DB", os.path.join(BASE_DIR, "kralzeka.db"))
 
@@ -54,15 +36,17 @@ DEFAULT_HF_IMAGE_MODEL = "stabilityai/stable-diffusion-xl"
 
 IMAGE_DAILY_LIMIT = 5
 ADMIN_USERNAME = "enes"
-ADMIN_PASSWORD = "enes1357924680"  # ilk admin (kodda korunur)
+ADMIN_PASSWORD = "enes1357924680"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("kralzeka")
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['PERMANENT_SESSION_LIFETIME'] = 7 * 24 * 3600  # 7 days
 
-# ========== DB YARDIMCILARI ==========
+# ========== DB ==========
 def get_db():
     db = getattr(g, "_db", None)
     if db is None:
@@ -110,14 +94,12 @@ def init_db(db_conn=None):
     );
     """)
     db.commit()
-    # ensure initial admin exists (immutable)
+    # initial admin
     try:
         cur.execute("SELECT id FROM users WHERE username = ?", (ADMIN_USERNAME,))
         if not cur.fetchone():
-            cur.execute(
-                "INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, ?)",
-                (ADMIN_USERNAME, generate_password_hash(ADMIN_PASSWORD), 1)
-            )
+            cur.execute("INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, ?)",
+                        (ADMIN_USERNAME, generate_password_hash(ADMIN_PASSWORD), 1))
             db.commit()
             logger.info("İlk admin oluşturuldu: %s", ADMIN_USERNAME)
     except Exception:
@@ -130,7 +112,7 @@ def close_db(exception):
         db.close()
         g._db = None
 
-# ========== YARDIMCI FONKSİYONLAR ==========
+# ========== Yardımcılar ==========
 def log_event(level: str, message: str, meta: Optional[dict] = None):
     try:
         db = get_db()
@@ -196,10 +178,8 @@ def protected_admin_modify(target_username: str, acting_admin: str):
         return False
     return True
 
-# ========== AI BACKENDS (esnek, anahtar yoksa graceful fallback) ==========
+# ========== AI BACKENDS (basit) ==========
 def call_groq_chat(prompt: str, model=DEFAULT_GROQ_MODEL):
-    if not requests:
-        raise RuntimeError("requests kütüphanesi yüklü değil")
     if not GROQ_API_KEY:
         raise RuntimeError("GROQ key yok")
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -208,13 +188,11 @@ def call_groq_chat(prompt: str, model=DEFAULT_GROQ_MODEL):
     r = requests.post(url, headers=headers, json=data, timeout=30)
     r.raise_for_status()
     resp = r.json()
-    if isinstance(resp, dict) and "choices" in resp and resp["choices"]:
+    if "choices" in resp and resp["choices"]:
         return resp["choices"][0].get("message", {}).get("content") or resp["choices"][0].get("text")
     return resp.get("output_text") or json.dumps(resp)
 
 def call_hf_text(prompt: str, model: str = DEFAULT_HF_TEXT_MODEL):
-    if not requests:
-        raise RuntimeError("requests kütüphanesi yüklü değil")
     if not HF_API_KEY:
         raise RuntimeError("HF key yok")
     url = f"https://api-inference.huggingface.co/models/{model}"
@@ -229,12 +207,9 @@ def call_hf_text(prompt: str, model: str = DEFAULT_HF_TEXT_MODEL):
         return resp[0]["generated_text"]
     if isinstance(resp, str):
         return resp
-    # Inference API sometimes returns structured output
     return json.dumps(resp)
 
 def generate_image_hf(prompt: str, model: str = DEFAULT_HF_IMAGE_MODEL):
-    if not requests:
-        raise RuntimeError("requests kütüphanesi yüklü değil")
     if not HF_API_KEY:
         raise RuntimeError("HF key yok")
     url = f"https://api-inference.huggingface.co/models/{model}"
@@ -247,6 +222,8 @@ def generate_image_hf(prompt: str, model: str = DEFAULT_HF_IMAGE_MODEL):
         data = r.json()
         if isinstance(data, dict) and "image_base64" in data:
             return base64.b64decode(data["image_base64"])
+        if isinstance(data, dict) and "generated_image" in data:
+            return base64.b64decode(data["generated_image"])
         if "error" in data:
             raise RuntimeError(data["error"])
         raise RuntimeError("HF image model returned unexpected JSON")
@@ -255,22 +232,21 @@ def generate_image_hf(prompt: str, model: str = DEFAULT_HF_IMAGE_MODEL):
 
 def ai_chat(prompt: str) -> str:
     try:
-        if GROQ_API_KEY and requests:
+        if GROQ_API_KEY:
             try:
                 out = call_groq_chat(prompt)
                 if out:
                     return out
             except Exception:
-                logger.warning("Groq başarısız veya erişilemez; HF'e düşülüyor.")
-        if HF_API_KEY and requests:
+                logger.warning("Groq başarısız, HF'e düşülüyor.")
+        if HF_API_KEY:
             return call_hf_text(prompt)
-        # If no AI keys / requests library missing -> return helpful message
-        raise RuntimeError("AI yapılamıyor (GROQ/HF anahtarları yok veya requests eksik).")
+        raise RuntimeError("Hiçbir model yapılamıyor (GROQ/HF anahtarları yok veya hata).")
     except Exception as e:
         logger.exception("ai_chat exception")
         return f"KralZeka Hata: {str(e)}"
 
-# ========== IMAGE USAGE ==========
+# ========== Image usage ==========
 def get_image_usage_for_today(user_id: int):
     db = get_db()
     cur = db.cursor()
@@ -291,83 +267,200 @@ def increment_image_usage(user_id: int, amount: int = 1):
         cur.execute("INSERT INTO image_usage (user_id, usage_date, count) VALUES (?, ?, ?)", (user_id, today, amount))
     db.commit()
 
-# ========== GÖMÜLÜ CSS VE PROCFİLE ==========
-GOBBED_CSS = """
-/* gömülü style (kısa - full görünüm) */
-body{background:#041213;color:#d8efe9;font-family:Inter,Segoe UI,Arial;margin:0;padding:20px}
+# ========== Inline static (CSS/JS) ==========
+INLINE_CSS = """
+/* minimal theme (KralZeka) */
+body{background:#071018;color:#d8efe9;font-family:Inter,Segoe UI,Arial;margin:0;padding:20px}
 .wrap{max-width:980px;margin:0 auto}
 header{display:flex;justify-content:space-between;align-items:center}
 h1{margin:0;font-size:28px}
-.card{background:rgba(0,0,0,0.45);padding:18px;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,0.6);margin-top:18px}
-input,textarea,button,select{font-size:15px;padding:10px;border-radius:8px;border:1px solid #233; background:#071213;color:#d8efe9;width:100%}
+.card{background:rgba(0,0,0,0.45);padding:18px;border-radius:10px;box-shadow:0 6px 30px rgba(0,0,0,0.6);margin-top:18px}
+input,textarea,button,select{font-size:16px;padding:10px;border-radius:8px;border:1px solid #263238;background:#0b1517;color:#d8efe9;width:100%}
 .row{display:flex;gap:10px}
-.row>*{flex:1}
-a{color:#9fe7d1}
+.row> *{flex:1}
 .muted{color:#9cb8b8;font-size:14px}
 .msg{background:#042627;padding:12px;border-radius:8px;margin-bottom:8px}
 .admin-tag{color:#ffd54f;font-weight:bold}
+.top-buttons a{color:#d8efe9;margin-left:12px}
+footer{margin-top:40px;text-align:center;color:#6c9b9b}
 .small{font-size:13px;color:#9dbdbd}
 .danger{color:#ffd2d2}
 table{width:100%;border-collapse:collapse}
 th,td{padding:8px;border-bottom:1px solid rgba(255,255,255,0.03);text-align:left}
 """
 
-PROCFILE_TXT = "web: gunicorn kralzeka_full_app:app --bind 0.0.0.0:$PORT --workers 1"
-
-# ========== HTML RENDER HELPERS ==========
-BASE_HTML = """
-<!doctype html>
-<html lang="tr">
-<head>
-  <meta charset="utf-8">
-  <title>KralZeka v2</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-  <div class="wrap">
-    <header>
-      <h1>KralZeka v2</h1>
-      <div class="top-buttons">
-        {% if user %}
-          Merhaba, <strong>{{ user['username'] }}</strong> {% if user['is_admin'] %}<span class="admin-tag">[ADMIN]</span>{% endif %}
-           | <a href="{{ url_for('logout') }}">Çıkış yap</a>
-           {% if user['is_admin'] %} | <a href="{{ url_for('admin_panel') }}">Admin Panel</a>{% endif %}
-        {% else %}
-          <a href="{{ url_for('login') }}">Giriş</a> | <a href="{{ url_for('register') }}">Kayıt</a>
-        {% endif %}
-      </div>
-    </header>
-    <main>
-      {{ body_html|safe }}
-    </main>
-    <footer style="margin-top:30px;text-align:center;color:#6c9b9b">
-      © KralZeka v2 — Tüm arayüz Türkçe. Gizli anahtarlar sadece ENV'de tutulur.
-    </footer>
-  </div>
-</body>
-</html>
+INLINE_JS = """
+// minimal JS for future (no external libs)
+console.log("KralZeka inline JS loaded");
 """
 
-# Helper to render page with base
-from jinja2 import Template
-def render_page(body_html, **context):
-    t = Template(BASE_HTML)
-    # ensure user in context
-    if "user" not in context:
-        context["user"] = None
-    return t.render(body_html=body_html, **context)
-
-# ========== ROUTES ==========
 @app.route("/static/style.css")
-def serve_css():
-    # Serve embedded CSS so no external static folder required
-    return Response(GOBBED_CSS, mimetype="text/css")
+def static_css():
+    return Response(INLINE_CSS, mimetype="text/css")
 
-@app.route("/procfile")
-def serve_procfile():
-    return Response(PROCFILE_TXT, mimetype="text/plain")
+@app.route("/static/app.js")
+def static_js():
+    return Response(INLINE_JS, mimetype="application/javascript")
 
+# ========== Templates (use DictLoader so extends() works) ==========
+BASE_HTML = """<!doctype html><html lang="tr"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KralZeka v1 - {% block title %}{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static_css') }}">
+<script src="{{ url_for('static_js') }}"></script>
+</head><body>
+<div class="wrap">
+<header><h1>KralZeka v1</h1>
+<div class="top-buttons">
+  {% if user %}
+    Merhaba, <strong>{{ user['username'] }}</strong> {% if user['is_admin'] %}<span class="admin-tag">[ADMIN]</span>{% endif %} |
+    <a href="{{ url_for('logout') }}">Çıkış yap</a>
+    {% if user['is_admin'] %} | <a href="{{ url_for('admin_panel') }}">Admin Panel</a>{% endif %}
+  {% else %}
+    <a href="{{ url_for('login') }}">Giriş</a> | <a href="{{ url_for('register') }}">Kayıt</a>
+  {% endif %}
+</div></header>
+{% block body %}{% endblock %}
+<footer><div class="small">© KralZeka v1 — Gizli anahtarlar sadece ENV'de tutulur.</div></footer>
+</div></body></html>"""
+
+INDEX_HTML = """{% extends 'base' %}{% block title %}Ana Sayfa{% endblock %}{% block body %}
+<div class="card">
+<form method="post" action="{{ url_for('chat') }}">
+  <label class="small">Sohbet (Groq öncelikli, Hugging Face yedek)</label>
+  <div style="display:flex;gap:10px">
+    <input name="prompt" placeholder="Bir şey yaz..." autocomplete="off" required>
+    <button type="submit">Gönder</button>
+  </div>
+</form>
+</div>
+
+<div class="card">
+<h3>Son mesajlar</h3>
+{% for m in messages %}
+  <div class="msg">
+    <div class="small muted">{{ m['created_at'] }} — <strong>{{ m['sender'] }}</strong></div>
+    <div>{{ m['content'] }}</div>
+  </div>
+{% endfor %}
+</div>
+
+<div class="card">
+<h3>Modlar</h3>
+<div class="small">Seçilebilir modlar (gelecekte UI üzerinden geçiş yapılabilir):</div>
+<ul class="small">
+  <li>Ödev Modu — Sınav/çalışma kağıtları oluşturma, yüklenen görsellerde soruları çözme.</li>
+  <li>Espri Modu — Şakalar karışık, hafif sohbet.</li>
+  <li>Sohbet Modu — Normal sohbet.</li>
+  <li>Sunum Modu — Slayt/sunum/afiş oluşturma (görseller ve metin).</li>
+  <li>Kalite Yükseltme — Görsel kalite yükseltme (admin sınırsız, kullanıcı günlük {{ image_limit }}).</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>Yenilik talep / Güncelleme isteği</h3>
+<form method="post" action="{{ url_for('feature_request') }}">
+  <textarea name="request_text" rows="3" placeholder="Yeni bir özellik veya düzeltme isteği yaz..." required></textarea>
+  <div style="display:flex;gap:10px;margin-top:8px">
+    <input name="tag" placeholder="Kısa etiket (örn: sunum, ödev, görsel)">
+    <button>Gönder</button>
+  </div>
+</form>
+</div>
+{% endblock %}"""
+
+LOGIN_HTML = """{% extends 'base' %}{% block title %}Giriş{% endblock %}{% block body %}
+<div class="card">
+<h3>Giriş</h3>
+{% if error %}<div class="danger">{{ error }}</div>{% endif %}
+<form method="post">
+  <label>Kullanıcı adı</label>
+  <input name="username" required>
+  <label>Parola</label>
+  <input name="password" type="password" required>
+  <div style="margin-top:10px"><button>Giriş yap</button></div>
+</form>
+</div>
+{% endblock %}"""
+
+REGISTER_HTML = """{% extends 'base' %}{% block title %}Kayıt{% endblock %}{% block body %}
+<div class="card">
+<h3>Kayıt ol</h3>
+{% if error %}<div class="danger">{{ error }}</div>{% endif %}
+<form method="post">
+  <label>Kullanıcı adı</label>
+  <input name="username" required>
+  <label>Parola</label>
+  <input name="password" type="password" required>
+  <label>Parola tekrar</label>
+  <input name="password2" type="password" required>
+  <div style="margin-top:10px"><button>Kayıt ol</button></div>
+</form>
+<div class="small muted">İlk admin ({{ admin_username }}) silinemez veya demote edilemez.</div>
+</div>
+{% endblock %}"""
+
+ADMIN_HTML = """{% extends 'base' %}{% block title %}Admin{% endblock %}{% block body %}
+<div class="card">
+<h3>Admin Paneli</h3>
+<div class="small">Kullanıcı yönetimi, limitler, kod-yazma bölümü (sadece adminlere özel), günlük kullanım yönetimi.</div>
+<hr>
+<h4>Kullanıcılar</h4>
+<table class="small">
+  <tr><th>Kullanıcı</th><th>Admin</th><th>Oluşturma</th><th>İşlemler</th></tr>
+  {% for u in users %}
+    <tr>
+      <td>{{ u['username'] }}</td>
+      <td>{{ 'Evet' if u['is_admin'] else 'Hayır' }}</td>
+      <td>{{ u['created_at'] }}</td>
+      <td>
+        {% if u['username'] != admin_username %}
+          {% if not u['is_admin'] %}
+            <form style="display:inline" method="post" action="{{ url_for('make_admin', user_id=u['id']) }}"><button>Admin yap</button></form>
+          {% else %}
+            <form style="display:inline" method="post" action="{{ url_for('revoke_admin', user_id=u['id']) }}"><button>Adminlığı kaldır</button></form>
+          {% endif %}
+          <form style="display:inline" method="post" action="{{ url_for('delete_user', user_id=u['id']) }}"><button class="danger">Sil</button></form>
+        {% else %}
+          (korunuyor)
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+</table>
+
+<hr>
+<h4>Kod Yazma / Otomatik Yardımcı (Admin-only)</h4>
+<form method="post" action="{{ url_for('admin_code_tool') }}">
+  <textarea name="prompt" rows="4" placeholder="Üretilecek kod veya talimat..." required></textarea>
+  <div style="margin-top:8px"><button>Yaz</button></div>
+</form>
+<hr>
+<h4>Loglar (son 100)</h4>
+<div class="small">
+  {% for l in logs %}
+    <div class="msg small"><strong>{{ l['level'] }}</strong> — {{ l['message'] }} <div class="muted">{{ l['created_at'] }}</div></div>
+  {% endfor %}
+</div>
+</div>
+{% endblock %}"""
+
+ERROR_500 = """{% extends 'base' %}{% block title %}Hata{% endblock %}{% block body %}
+<div class="card"><h3>Sunucu Hatası (500)</h3><p>Bir hata oluştu. Admin'e bildirin veya logları kontrol edin.</p></div>
+{% endblock %}"""
+
+TEMPLATES = {
+    'base': BASE_HTML,
+    'index.html': INDEX_HTML,
+    'login.html': LOGIN_HTML,
+    'register.html': REGISTER_HTML,
+    'admin.html': ADMIN_HTML,
+    '500.html': ERROR_500
+}
+
+app.jinja_loader = DictLoader(TEMPLATES)
+
+# ========== Routes ==========
 @app.route("/", methods=["GET"])
 def index():
     user = None
@@ -380,49 +473,7 @@ def index():
     cur = db.cursor()
     cur.execute("SELECT * FROM messages ORDER BY created_at DESC LIMIT 20")
     msgs = cur.fetchall()
-    # Build body HTML
-    body = """
-    <div class="card">
-      <form method="post" action="/chat">
-        <label class="small">Sohbet (Groq öncelikli, Hugging Face yedek)</label>
-        <div style="display:flex;gap:10px">
-          <input name="prompt" placeholder="Bir şey yaz..." autocomplete="off" required>
-          <button type="submit">Gönder</button>
-        </div>
-      </form>
-    </div>
-    <div class="card">
-      <h3>Son mesajlar</h3>
-      {% for m in messages %}
-        <div class="msg">
-          <div class="small muted">{{ m['created_at'] }} — <strong>{{ m['sender'] }}</strong></div>
-          <div>{{ m['content'] }}</div>
-        </div>
-      {% endfor %}
-    </div>
-    <div class="card">
-      <h3>Modlar</h3>
-      <div class="small">Seçilebilir modlar (gelecekte UI üzerinden geçiş yapılabilir):</div>
-      <ul class="small">
-        <li>Ödev Modu — Sınav/çalışma kağıtları oluşturma, yüklenen görsellerde soruları çözme.</li>
-        <li>Espri Modu — Şakalar karışık, hafif sohbet.</li>
-        <li>Sohbet Modu — Normal sohbet.</li>
-        <li>Sunum Modu — Slayt/sunum/afiş oluşturma (görseller ve metin).</li>
-        <li>Kalite Yükseltme — Görsel kalite yükseltme (admin sınırsız, kullanıcı günlük {{ image_limit }}).</li>
-      </ul>
-    </div>
-    <div class="card">
-      <h3>Yenilik talep / Güncelleme isteği</h3>
-      <form method="post" action="/feature_request">
-        <textarea name="request_text" rows="3" placeholder="Yeni bir özellik veya düzeltme isteği yaz..." required></textarea>
-        <div style="display:flex;gap:10px;margin-top:8px">
-          <input name="tag" placeholder="Kısa etiket (örn: sunum, ödev, görsel)">
-          <button>Gönder</button>
-        </div>
-      </form>
-    </div>
-    """
-    return render_page(Template(body).render(messages=msgs, image_limit=IMAGE_DAILY_LIMIT), user=user)
+    return render_template('index.html', user=user, messages=msgs, image_limit=IMAGE_DAILY_LIMIT)
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
@@ -431,34 +482,18 @@ def register():
         password = request.form.get("password", "")
         password2 = request.form.get("password2", "")
         if not username or not password:
-            return render_page("<div class='card'><div class='danger'>Alanları doldurun</div></div>")
+            return render_template('register.html', error="Alanları doldurun", admin_username=ADMIN_USERNAME, user=None)
         if password != password2:
-            return render_page("<div class='card'><div class='danger'>Parolalar eşleşmiyor</div></div>")
+            return render_template('register.html', error="Parolalar eşleşmiyor", admin_username=ADMIN_USERNAME, user=None)
         if get_user_by_username(username):
-            return render_page("<div class='card'><div class='danger'>Kullanıcı adı alınmış</div></div>")
+            return render_template('register.html', error="Kullanıcı adı alınmış", admin_username=ADMIN_USERNAME, user=None)
         uid = create_user(username, password, 0)
         if not uid:
-            return render_page("<div class='card'><div class='danger'>Kayıt başarısız</div></div>")
+            return render_template('register.html', error="Kayıt başarısız", admin_username=ADMIN_USERNAME, user=None)
         log_event("INFO", f"Kayıt: {username}")
         session["user_id"] = uid
         return redirect(url_for("index"))
-    # GET
-    body = """
-    <div class="card">
-      <h3>Kayıt ol</h3>
-      <form method="post">
-        <label>Kullanıcı adı</label>
-        <input name="username" required>
-        <label>Parola</label>
-        <input name="password" type="password" required>
-        <label>Parola tekrar</label>
-        <input name="password2" type="password" required>
-        <div style="margin-top:10px"><button>Kayıt ol</button></div>
-      </form>
-      <div class="small muted">İlk admin ({{ admin_username }}) silinemez veya demote edilemez.</div>
-    </div>
-    """
-    return render_page(Template(body).render(admin_username=ADMIN_USERNAME))
+    return render_template('register.html', error=None, admin_username=ADMIN_USERNAME, user=None)
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -467,23 +502,12 @@ def login():
         password = request.form.get("password", "")
         user = get_user_by_username(username)
         if not user or not check_password_hash(user["password_hash"], password):
-            return render_page("<div class='card'><div class='danger'>Kullanıcı adı veya şifre hatalı</div></div>")
+            return render_template('login.html', error="Kullanıcı adı veya şifre hatalı", user=None)
         session["user_id"] = user["id"]
+        session.permanent = True
         log_event("INFO", f"Giriş: {username}")
         return redirect(url_for("index"))
-    body = """
-    <div class="card">
-      <h3>Giriş</h3>
-      <form method="post">
-        <label>Kullanıcı adı</label>
-        <input name="username" required>
-        <label>Parola</label>
-        <input name="password" type="password" required>
-        <div style="margin-top:10px"><button>Giriş yap</button></div>
-      </form>
-    </div>
-    """
-    return render_page(body)
+    return render_template('login.html', error=None, user=None)
 
 @app.route("/logout")
 def logout():
@@ -502,7 +526,6 @@ def chat():
     cur.execute("INSERT INTO messages (user_id, sender, content) VALUES (?, ?, ?)",
                 (user["id"], user["username"], prompt))
     db.commit()
-    # process
     try:
         response_text = ai_chat(prompt)
     except Exception as e:
@@ -521,7 +544,7 @@ def feature_request():
         log_event("FEATURE", txt, {"tag": tag, "user": g.user["username"]})
     return redirect(url_for("index"))
 
-# ========== ADMIN ==========
+# ========== Admin routes ==========
 @app.route("/admin", methods=["GET"])
 @require_admin
 def admin_panel():
@@ -529,60 +552,17 @@ def admin_panel():
     cur = db.cursor()
     cur.execute("SELECT id, username, is_admin, created_at FROM users ORDER BY created_at DESC")
     users = cur.fetchall()
-    cur.execute("SELECT level, message, meta, created_at FROM logs ORDER BY id DESC LIMIT 200")
+    cur.execute("SELECT level, message, meta, created_at FROM logs ORDER BY id DESC LIMIT 100")
     logs = cur.fetchall()
-    # admin code tool UI + users + logs
-    body = """
-    <div class="card">
-      <h3>Admin Paneli</h3>
-      <div class="small">Kullanıcı yönetimi, limitler, kod-yazma bölümü (sadece adminlere özel), günlük kullanım yönetimi.</div>
-      <hr>
-      <h4>Kullanıcılar</h4>
-      <table class="small">
-        <tr><th>Kullanıcı</th><th>Admin</th><th>Oluşturma</th><th>İşlemler</th></tr>
-        {% for u in users %}
-          <tr>
-            <td>{{ u['username'] }}</td>
-            <td>{{ 'Evet' if u['is_admin'] else 'Hayır' }}</td>
-            <td>{{ u['created_at'] }}</td>
-            <td>
-              {% if u['username'] != admin_username %}
-                {% if not u['is_admin'] %}
-                  <form style="display:inline" method="post" action="{{ url_for('make_admin', user_id=u['id']) }}"><button>Admin yap</button></form>
-                {% else %}
-                  <form style="display:inline" method="post" action="{{ url_for('revoke_admin', user_id=u['id']) }}"><button>Adminlığı kaldır</button></form>
-                {% endif %}
-                <form style="display:inline" method="post" action="{{ url_for('delete_user', user_id=u['id']) }}"><button class="danger">Sil</button></form>
-              {% else %}
-                (korunuyor)
-              {% endif %}
-            </td>
-          </tr>
-        {% endfor %}
-      </table>
-      <hr>
-      <h4>Kod Yazma / Otomatik Yardımcı (Admin-only)</h4>
-      <div class="small">Admin olarak örneğin "bir yapay zeka yardımcı yaz" dediğinde sistem sana sorular soracak ve kodu üretecek.</div>
-      <form method="post" action="{{ url_for('admin_code_tool') }}">
-        <textarea name="prompt" rows="4" placeholder="Üretilecek kod veya talimat..." required></textarea>
-        <div style="margin-top:8px"><button>Yaz</button></div>
-      </form>
-      <hr>
-      <h4>Loglar (son 200)</h4>
-      <div class="small">
-        {% for l in logs %}
-          <div class="msg small"><strong>{{ l['level'] }}</strong> — {{ l['message'] }} <div class="muted">{{ l['created_at'] }}</div></div>
-        {% endfor %}
-      </div>
-    </div>
-    """
-    return render_page(Template(body).render(users=users, logs=logs, admin_username=ADMIN_USERNAME), user=g.user)
+    return render_template('admin.html', users=users, logs=logs, admin_username=ADMIN_USERNAME, user=g.user)
 
 @app.route("/admin/make_admin/<int:user_id>", methods=["POST"])
 @require_admin
 def make_admin(user_id):
-    db = get_db(); cur = db.cursor()
-    cur.execute("SELECT username FROM users WHERE id = ?", (user_id,)); row = cur.fetchone()
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT username FROM users WHERE id = ?", (user_id,))
+    row = cur.fetchone()
     if not row:
         return "Kullanıcı yok", 404
     target = row["username"]
@@ -596,8 +576,10 @@ def make_admin(user_id):
 @app.route("/admin/revoke_admin/<int:user_id>", methods=["POST"])
 @require_admin
 def revoke_admin(user_id):
-    db = get_db(); cur = db.cursor()
-    cur.execute("SELECT username FROM users WHERE id = ?", (user_id,)); row = cur.fetchone()
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT username FROM users WHERE id = ?", (user_id,))
+    row = cur.fetchone()
     if not row:
         return "Kullanıcı yok", 404
     target = row["username"]
@@ -611,8 +593,10 @@ def revoke_admin(user_id):
 @app.route("/admin/delete_user/<int:user_id>", methods=["POST"])
 @require_admin
 def delete_user(user_id):
-    db = get_db(); cur = db.cursor()
-    cur.execute("SELECT username FROM users WHERE id = ?", (user_id,)); r = cur.fetchone()
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT username FROM users WHERE id = ?", (user_id,))
+    r = cur.fetchone()
     if not r:
         return "Kullanıcı yok", 404
     target = r["username"]
@@ -636,7 +620,7 @@ def admin_code_tool():
     log_event("CODE", ai_response, {"admin": g.user["username"], "prompt": prompt})
     return redirect(url_for("admin_panel"))
 
-# ========== IMAGE API ==========
+# ========== Image generation endpoint ==========
 @app.route("/api/generate_image", methods=["POST"])
 @require_login
 def api_generate_image():
@@ -654,8 +638,9 @@ def api_generate_image():
         if not user["is_admin"]:
             increment_image_usage(user["id"], 1)
         b64 = base64.b64encode(img_bytes).decode("utf-8")
-        db = get_db(); cur = db.cursor()
         preview = f"data:image/png;base64,{b64[:180]}..."
+        db = get_db()
+        cur = db.cursor()
         cur.execute("INSERT INTO messages (user_id, sender, content) VALUES (?, ?, ?)",
                     (user["id"], "KralZeka (görsel)", preview))
         db.commit()
@@ -664,25 +649,21 @@ def api_generate_image():
         logger.exception("image generation error")
         return jsonify({"error": f"Görsel üretilemedi: {str(e)}"}), 500
 
-# ========== HATA YAKALAMA ==========
+# ========== Error handling ==========
 @app.errorhandler(500)
 def handle_500(e):
     try:
-        tb = traceback.format_exc()
-        log_event("ERROR", str(e), {"path": request.path, "trace": tb})
+        log_event("ERROR", str(e), {"path": request.path})
     except Exception:
         logger.exception("log_event failed while handling 500")
-    body = "<div class='card'><h3>Sunucu Hatası (500)</h3><p>Bir hata oluştu. Admin'e bildirin veya logları kontrol edin.</p></div>"
-    return render_page(body), 500
+    return render_template('500.html', user=None), 500
 
-# ========== START ==========
+# ========== Start ==========
 def start_app():
     init_db()
-    logger.info("KralZeka v2 starting...")
-    # local debug mode (if you want)
+    logger.info("KralZeka v1 starting...")
     if os.environ.get("FLASK_RUN_LOCAL", "").lower() in ("1", "true"):
-        app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
+        app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
 
-# WSGI app for gunicorn
 if __name__ == "__main__":
     start_app()
