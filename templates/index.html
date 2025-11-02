@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}Ana Sayfa | KralZeka{% endblock %}
+
+{% block content %}
+  <header>
+    <h1>👑 KralZeka'ya Hoş Geldin!</h1>
+  </header>
+
+  <main>
+    <p>Yapay zekanın gücü senin ellerinde.</p>
+    <p>Buradan giriş yapabilir veya yeni bir hesap oluşturabilirsin.</p>
+
+    <div style="margin-top: 40px;">
+      <a href="/login" style="color: #fff; background:#333; padding: 10px 20px; border-radius: 10px; text-decoration: none;">Giriş Yap</a>
+      <a href="/register" style="color: #fff; background:#555; padding: 10px 20px; border-radius: 10px; text-decoration: none; margin-left:10px;">Kayıt Ol</a>
+    </div>
+  </main>
+{% endblock %}
