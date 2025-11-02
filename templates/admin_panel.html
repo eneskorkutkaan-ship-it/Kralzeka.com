@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Yönetici Paneli - KralZeka{% endblock %}
+{% block content %}
+<div class="container mt-5">
+  <h2 class="text-center mb-4">👑 KralZeka Yönetici Paneli</h2>
+
+  <div class="card p-4 shadow-sm">
+    <h4 class="mb-3">Kullanıcı Listesi</h4>
+    <table class="table table-bordered table-hover">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>İsim</th>
+          <th>Rol</th>
+          <th>Görsel Limiti</th>
+          <th>İşlem</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for user in users %}
+        <tr>
+          <td>{{ user.id }}</td>
+          <td>{{ user.username }}</td>
+          <td>
+            {% if user.is_admin %}
+              {% if user.username == "enes" %}
+                <span class="badge bg-warning text-dark">👑 Kral Admin</span>
+              {% else %}
+                <span class="badge bg-success">Admin</span>
+              {% endif %}
+            {% else %}
+              <span class="badge bg-secondary">Kullanıcı</span>
+            {% endif %}
+          </td>
+          <td>{{ user.limit }}</td>
+          <td>
+            {% if user.username != "enes" %}
+              {% if not user.is_admin %}
+                <a href="/make_admin/{{ user.id }}" class="btn btn-sm btn-primary">Admin Yap</a>
+              {% else %}
+                <a href="/remove_admin/{{ user.id }}" class="btn btn-sm btn-warning">Adminliği Kaldır</a>
+              {% endif %}
+              <a href="/increase_limit/{{ user.id }}" class="btn btn-sm btn-info">Limit Arttır</a>
+              <a href="/delete_user/{{ user.id }}" class="btn btn-sm btn-danger">Sil</a>
+            {% else %}
+              <button class="btn btn-sm btn-secondary" disabled>Korunan Hesap</button>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card p-4 shadow-sm mt-4">
+    <h4 class="mb-3">🧠 Sistem Güncellemeleri & İstekler</h4>
+    <ul>
+      {% for req in requests %}
+        <li>{{ req.text }} — <small>{{ req.date }}</small></li>
+      {% else %}
+        <li>Henüz bir istek yok.</li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <div class="card p-4 shadow-sm mt-4">
+    <h4 class="mb-3">🛠️ Sistem Hata Bildirimleri</h4>
+    <ul>
+      {% for err in errors %}
+        <li>{{ err.text }} — <small>{{ err.date }}</small></li>
+      {% else %}
+        <li>Şu anda sistemde hata bulunmamaktadır.</li>
+      {% endfor %}
+    </ul>
+  </div>
+
+</div>
+{% endblock %}
