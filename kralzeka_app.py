@@ -696,3 +696,8 @@ def start_app():
 # WSGI app variable for gunicorn
 if __name__ == "__main__":
     start_app()
+ # gunicorn için app export
+app = app
+
+if __name__ == "__main__":
+    start_app()
