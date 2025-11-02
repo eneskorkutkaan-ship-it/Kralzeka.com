@@ -1,28 +1,10 @@
-# Flask ve veritabanı
 Flask==3.0.3
-Flask-Login==0.6.3
-Flask-SQLAlchemy==3.1.1
-Flask-WTF==1.2.1
-
-# Veritabanı sürücüsü
-SQLAlchemy==2.0.30
-
-# HTTP istekleri
-requests==2.32.3
-
-# Hugging Face ve Groq API
-huggingface-hub==0.23.4
-groq==0.8.0
-
-# Görsel işlemleri (Render'da pillow bazen sorun çıkarır, bu yüzden wheel'den çekeriz)
-Pillow==9.5.0
-Werkzeug==3.0.3
-
-# Yardımcı araçlar
-python-dotenv==1.0.1
-gunicorn==23.0.0
-itsdangerous==2.2.0
-jinja2==3.1.4
+requests==2.31.0
+Jinja2==3.1.2
+Werkzeug==2.3.7
+itsdangerous==2.1.2
 click==8.1.7
-
-# Tensorflow, Torch gibi ağır modüller yok (Render free-tier kaldırmaz)
+Pillow==9.5.0
+# DB ve yardımcılar (sqlite3 stdlib)
+# Hugging Face hub (kullanmak istersen)
+huggingface-hub==0.16.4
