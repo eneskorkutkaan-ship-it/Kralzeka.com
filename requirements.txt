@@ -1,4 +1,4 @@
-# ---------- Render uyumlu temel kurulum ----------
+# ---------- Sistem uyumu ----------
 pip==25.3
 setuptools>=70.0
 wheel>=0.43.0
@@ -14,15 +14,16 @@ python-engineio==4.9.1
 python-socketio==5.11.3
 gunicorn==21.2.0
 
-# ---------- API ve yapay zeka bağlantıları ----------
+# ---------- Yapay zeka bağlantıları ----------
 requests==2.31.0
 huggingface_hub==0.23.4
 groq==0.5.0
 
-# ---------- Görsel işleme ----------
-Pillow==9.4.0
+# ---------- Görsel işleme (Render uyumlu sürüm) ----------
+Pillow==9.0.0
+numpy==1.26.4
 
-# ---------- Opsiyonel geliştirme / güvenlik ----------
+# ---------- Ek gereklilikler ----------
 urllib3==2.2.2
 certifi==2024.8.30
 charset-normalizer==3.3.2
