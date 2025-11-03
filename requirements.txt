@@ -1,3 +1,4 @@
 Flask>=2.1
 requests>=2.28
 Werkzeug>=2.1
+gunicorn
