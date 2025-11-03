@@ -1,1 +1,1 @@
-web: gunicorn kralzeka_app:app
+web: gunicorn Aurion_app:app
